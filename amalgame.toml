@@ -1,0 +1,96 @@
+# Package manifest — amalgame-database-nosql-mongodb
+#
+# MongoDB binding for Amalgame — dynamic-linked to the official
+# mongo-c-driver (libmongoc-1.0 + libbson-1.0). First amalgame-lang
+# package to:
+#   - link against TWO system libraries
+#   - use a document model (JSON strings in/out, BSON under the hood)
+#
+# Why dynamic-link instead of vendor: mongo-c-driver is large
+# (~150k LoC across both libs), tracks the MongoDB server protocol,
+# and is universally packaged on every modern distro / homebrew /
+# msys2.
+#
+# Prereqs (compile time): the mongo-c-driver development packages.
+# See README.md for per-OS install commands.
+#
+# Prereqs (runtime, the deployed user binary): the matching
+# libmongoc-1.0 / libbson-1.0 shared libraries must be present
+# on the user's machine.
+#
+# Surface (v1):
+#   Connect(uri)                                  lifecycle (mongodb:// URI)
+#   Close / IsConnected / LastError               lifecycle + diag
+#   Ping                                          server round-trip check
+#   ServerVersion                                 mongod version string
+#
+#   InsertOne(dbName, collName, jsonDoc)           document insert
+#   FindOne(dbName, collName, queryJson)          → JSON string ("" if none)
+#   FindMany(dbName, collName, queryJson)         → List<string> of JSON
+#   DeleteOne(dbName, collName, queryJson)         document delete
+#   UpdateOne(dbName, collName, queryJson, updateJson)  document update
+#   Count(dbName, collName, queryJson)            → number of matches
+#
+# All documents are passed as JSON strings; the wrapper converts
+# to/from BSON via libbson. Users parse results with
+# Amalgame.Formats.Json or any other JSON facade — keeps the
+# surface narrow without committing to a BSON-specific API.
+#
+# Out of scope (v2):
+#   - Aggregation pipelines (`Aggregate(coll, pipelineJson)`)
+#   - Indexes (`CreateIndex`, `ListIndexes`)
+#   - Change streams (`Watch(coll, pipelineJson) → cursor`)
+#   - Bulk write (InsertMany, UpdateMany, DeleteMany batches)
+#   - Transactions (mongoc_client_session_t)
+#   - GridFS (large blob storage)
+#   - Native typed accessors (vs current JSON-string round-trip)
+#
+# Installation:
+#
+#   amc package add mongodb                                                # via index
+#   amc package add github.com/amalgame-lang/amalgame-database-nosql-mongodb@v0.1.0
+
+[package]
+name              = "amalgame-database-nosql-mongodb"
+version           = "0.1.0"
+license           = "Apache-2.0"
+description       = "MongoDB binding for Amalgame — dynamic-linked to mongo-c-driver (libmongoc + libbson), no vendored lib."
+authors           = ["Bastien Mouget"]
+required-amalgame = ">=0.8.19"
+schema-version    = 1
+
+[stdlib]
+class     = "MongoDB"
+header    = "runtime/Amalgame_Database_NoSQL_MongoDB.h"
+namespace = "Amalgame.Database.NoSQL.MongoDB"
+
+# No vendored sources. The wrapper uses __has_include() to find
+# the headers across the two common system layouts (Debian:
+# <libmongoc-1.0/mongoc/mongoc.h>, Fedora / brew / MSYS2: just
+# <mongoc/mongoc.h>).
+
+# Multi-include paths: the Debian-style layout requires explicit
+# -I flags because the headers live under non-standard sub-dirs.
+# Fedora-style layouts work without these too — extra -I paths
+# pointing at non-existent dirs are a no-op for gcc.
+cflags     = "-I/usr/include/libmongoc-1.0 -I/usr/include/libbson-1.0 -I/usr/local/include/libmongoc-1.0 -I/usr/local/include/libbson-1.0 -I/opt/homebrew/include/libmongoc-1.0 -I/opt/homebrew/include/libbson-1.0"
+
+# Link against the two libraries. Universal names on every
+# distro since the C driver became the canonical client.
+libs       = ["mongoc-1.0", "bson-1.0"]
+
+[stdlib.functions]
+Connect        = { returns = "AmalgameMongoDB*" }
+Close          = { returns = "void" }
+IsConnected    = { returns = "code_bool" }
+LastError      = { returns = "code_string" }
+Ping           = { returns = "code_bool" }
+ServerVersion  = { returns = "code_string" }
+InsertOne      = { returns = "code_bool" }
+FindOne        = { returns = "code_string" }
+FindMany       = { returns = "AmalgameList*" }
+DeleteOne      = { returns = "code_bool" }
+UpdateOne      = { returns = "code_bool" }
+Count          = { returns = "i64" }
+
+[dependencies]

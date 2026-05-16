@@ -1,0 +1,149 @@
+// Stdlib test: Amalgame.Database.NoSQL.MongoDB — libmongoc binding.
+// Self-contained schema (`amctest_*` db prefix) so a shared dev
+// server isn't polluted. Tests Connect → Ping → ServerVersion →
+// InsertOne → Count → FindOne → FindMany → UpdateOne → DeleteOne.
+//
+// Connection URI comes from MONGO_URI env var (defaults to a
+// localhost mongo:27017).
+
+namespace Tests
+
+import Amalgame.Database.NoSQL.MongoDB
+
+public class Program {
+    public static void Main(string[] args) {
+
+        let uriRaw: string = Env.Get("MONGO_URI")
+        let uri: string = if (String_Length(uriRaw) > 0) {
+            uriRaw
+        } else {
+            "mongodb://127.0.0.1:27017"
+        }
+        let dbName: string = "amctest"
+        let coll: string = "notes"
+
+        let db = MongoDB.Connect(uri)
+        if (MongoDB.IsConnected(db)) {
+            Console.WriteLine("[PASS] connect")
+        } else {
+            Console.WriteLine("[FAIL] connect: " + MongoDB.LastError(db))
+            return
+        }
+
+        // ── Ping (real network round-trip) ───────────────────
+        let pingOk: bool = MongoDB.Ping(db)
+        if (pingOk) {
+            Console.WriteLine("[PASS] ping")
+        } else {
+            Console.WriteLine("[FAIL] ping: " + MongoDB.LastError(db))
+            return
+        }
+
+        // ── ServerVersion ────────────────────────────────────
+        let ver: string = MongoDB.ServerVersion(db)
+        if (String_Length(ver) > 0) {
+            Console.WriteLine("[PASS] ServerVersion: " + ver)
+        } else {
+            Console.WriteLine("[FAIL] ServerVersion empty")
+        }
+
+        // ── Clean slate: delete everything from prior runs ───
+        // DeleteOne in a loop until Count == 0. Simpler than
+        // exposing a Drop verb at the v1 surface.
+        var purged: int = 0
+        while (MongoDB.Count(db, dbName, coll, "{}") > 0) {
+            MongoDB.DeleteOne(db, dbName, coll, "{}")
+            purged = purged + 1
+            if (purged > 100) {
+                // safety
+                Console.WriteLine("[FAIL] couldn't purge collection")
+                return
+            }
+        }
+        Console.WriteLine("[PASS] clean slate (purged " + String_FromInt(purged) + ")")
+
+        // ── InsertOne (3 docs) ───────────────────────────────
+        let okA: bool = MongoDB.InsertOne(db, dbName, coll, "{\"name\":\"alpha\",\"n\":1}")
+        let okB: bool = MongoDB.InsertOne(db, dbName, coll, "{\"name\":\"beta\",\"n\":2}")
+        let okC: bool = MongoDB.InsertOne(db, dbName, coll, "{\"name\":\"gamma\",\"n\":3}")
+        if (okA && okB && okC) {
+            Console.WriteLine("[PASS] 3 inserts")
+        } else {
+            Console.WriteLine("[FAIL] inserts: " + MongoDB.LastError(db))
+        }
+
+        // ── Count == 3 ───────────────────────────────────────
+        let n: int = MongoDB.Count(db, dbName, coll, "{}")
+        if (n == 3) {
+            Console.WriteLine("[PASS] Count == 3")
+        } else {
+            Console.WriteLine("[FAIL] Count = " + String_FromInt(n))
+        }
+
+        // ── FindOne with selector ────────────────────────────
+        let one: string = MongoDB.FindOne(db, dbName, coll, "{\"name\":\"beta\"}")
+        if (String_IndexOf(one, "beta") >= 0) {
+            Console.WriteLine("[PASS] FindOne(beta) found")
+        } else {
+            Console.WriteLine("[FAIL] FindOne(beta) got: " + one)
+        }
+
+        // ── FindMany returning 3 docs ────────────────────────
+        let all = MongoDB.FindMany(db, dbName, coll, "{}")
+        if (all.Count() == 3) {
+            Console.WriteLine("[PASS] FindMany returns 3 docs")
+        } else {
+            Console.WriteLine("[FAIL] FindMany returned " + String_FromInt(all.Count()))
+        }
+
+        // ── UpdateOne ($set) ─────────────────────────────────
+        let updOk: bool = MongoDB.UpdateOne(db, dbName, coll,
+            "{\"name\":\"alpha\"}", "{\"$set\":{\"n\":42}}")
+        if (updOk) {
+            Console.WriteLine("[PASS] UpdateOne")
+        } else {
+            Console.WriteLine("[FAIL] UpdateOne: " + MongoDB.LastError(db))
+        }
+        let updated: string = MongoDB.FindOne(db, dbName, coll, "{\"name\":\"alpha\"}")
+        if (String_IndexOf(updated, "42") >= 0) {
+            Console.WriteLine("[PASS] UpdateOne persisted n=42")
+        } else {
+            Console.WriteLine("[FAIL] UpdateOne not persisted: " + updated)
+        }
+
+        // ── DeleteOne ────────────────────────────────────────
+        let delOk: bool = MongoDB.DeleteOne(db, dbName, coll, "{\"name\":\"gamma\"}")
+        if (delOk) {
+            Console.WriteLine("[PASS] DeleteOne")
+        }
+        let afterDel: int = MongoDB.Count(db, dbName, coll, "{}")
+        if (afterDel == 2) {
+            Console.WriteLine("[PASS] Count after delete == 2")
+        } else {
+            Console.WriteLine("[FAIL] Count after delete = " + String_FromInt(afterDel))
+        }
+
+        // ── Bad query JSON → LastError populated ─────────────
+        let bad: bool = MongoDB.InsertOne(db, dbName, coll, "this-is-not-json")
+        if (bad) {
+            Console.WriteLine("[FAIL] bad JSON returned OK")
+        } else {
+            let err: string = MongoDB.LastError(db)
+            if (String_Length(err) > 0) {
+                Console.WriteLine("[PASS] bad JSON reports error")
+            } else {
+                Console.WriteLine("[FAIL] bad JSON: no error string")
+            }
+        }
+
+        // ── Cleanup + close ──────────────────────────────────
+        MongoDB.DeleteOne(db, dbName, coll, "{}")
+        MongoDB.DeleteOne(db, dbName, coll, "{}")
+        MongoDB.Close(db)
+        if (!MongoDB.IsConnected(db)) {
+            Console.WriteLine("[PASS] Close drops connection")
+        } else {
+            Console.WriteLine("[FAIL] still connected after Close")
+        }
+    }
+}
