@@ -1,0 +1,78 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+    tags: ['v*']
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: Test against amc ${{ matrix.amc-tag }}
+    runs-on: ubuntu-latest
+
+    # GitHub Actions service container — official mongo:7 image.
+    # Health-check waits for mongosh ping before steps run.
+    services:
+      mongo:
+        image: mongo:7
+        ports: ['27017:27017']
+        options: >-
+          --health-cmd "mongosh --quiet --eval 'db.adminCommand({ping:1}).ok' | grep -q 1"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      MONGO_URI: "mongodb://127.0.0.1:27017"
+
+    strategy:
+      fail-fast: false
+      matrix:
+        # v0.8.19+ required (cgen + LSP fixes). Append tags as amc
+        # cuts meaningfully relevant releases.
+        amc-tag: [v0.8.20]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install system deps (libgc + libcurl + mongo-c-driver)
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y libgc-dev libcurl4-openssl-dev libmongoc-dev libbson-dev
+
+      - name: Download amc ${{ matrix.amc-tag }}
+        run: |
+          set -e
+          TAG="${{ matrix.amc-tag }}"
+          VERSION="${TAG#v}"
+          curl -sSL -o amc.tar.gz \
+            "https://github.com/amalgame-lang/Amalgame/releases/download/${TAG}/amc-${VERSION}-linux-x86_64.tar.gz"
+          mkdir -p $RUNNER_TEMP/amc-install
+          tar -xzf amc.tar.gz -C $RUNNER_TEMP/amc-install --strip-components=1
+          echo "AMC=$RUNNER_TEMP/amc-install/bin/amc" >> $GITHUB_ENV
+          echo "AMC_RUNTIME=$RUNNER_TEMP/amc-install/share/amalgame/runtime" >> $GITHUB_ENV
+
+      - name: Probe libmongoc + mongo reachability
+        run: |
+          echo "── libmongoc header probe ──"
+          # Debian ships headers under /usr/include/libmongoc-1.0
+          # so we need the -I flag to resolve <mongoc/mongoc.h>.
+          if echo "#include <mongoc/mongoc.h>" | gcc -E -xc -I/usr/include/libmongoc-1.0 -I/usr/include/libbson-1.0 - >/dev/null 2>&1; then
+            echo "  mongoc/mongoc.h: OK (via -I/usr/include/libmongoc-1.0)"
+          else
+            echo "  mongoc/mongoc.h: MISSING"; exit 1
+          fi
+          echo "── mongo reachability ──"
+          if (echo > /dev/tcp/127.0.0.1/27017) 2>/dev/null; then
+            echo "  mongo: reachable at 127.0.0.1:27017"
+          else
+            echo "  mongo: NOT reachable — service container not healthy?"; exit 1
+          fi
+
+      - name: Run end-to-end tests
+        run: |
+          chmod +x ./tests/run_tests.sh
+          ./tests/run_tests.sh "$AMC"
