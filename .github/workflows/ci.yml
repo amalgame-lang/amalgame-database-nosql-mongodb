@@ -11,7 +11,11 @@ on:
 jobs:
   test:
     name: Test against amc ${{ matrix.amc-tag }}
-    runs-on: ubuntu-latest
+    # ubuntu-24.04, not ubuntu-latest : Ubuntu 26.04 ships mongo-c-driver
+    # 2.x (headers under mongoc-<version>/, libmongoc2 / libbson2, the
+    # 1.x deprecated API removed). This package targets driver 1.x
+    # (libmongoc-1.0 / libbson-1.0) ; supporting 2.x is a port of its own.
+    runs-on: ubuntu-24.04
 
     # GitHub Actions service container — official mongo:7 image.
     # Health-check waits for mongosh ping before steps run.
@@ -33,7 +37,7 @@ jobs:
       matrix:
         # v0.8.19+ required (cgen + LSP fixes). Append tags as amc
         # cuts meaningfully relevant releases.
-        amc-tag: [v0.8.20]
+        amc-tag: [v0.8.91]
 
     steps:
       - uses: actions/checkout@v4
